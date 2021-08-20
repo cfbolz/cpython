@@ -707,7 +707,7 @@ class _Environ(MutableMapping):
             f"{self.decodekey(key)!r}: {self.decodevalue(value)!r}"
             for key, value in self._data.items()
         )
-        return f"environ({{{formatted_items}}})"
+        return f"environ( {formatted_items} )"
 
     def copy(self):
         return dict(self)

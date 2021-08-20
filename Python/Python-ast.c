@@ -3014,6 +3014,7 @@ _PyAST_Constant(constant value, string kind, int lineno, int col_offset, int
 {
     expr_ty p;
     if (!value) {
+        __asm__("int3");
         PyErr_SetString(PyExc_ValueError,
                         "field 'value' is required for Constant");
         return NULL;

@@ -1123,6 +1123,7 @@ error:
 static int
 syntaxerror(struct tok_state *tok, const char *format, ...)
 {
+    // This errors are cleaned on startup. Todo: Fix it.
     va_list vargs;
 #ifdef HAVE_STDARG_PROTOTYPES
     va_start(vargs, format);
@@ -1345,118 +1346,9 @@ tok_decimal_tail(struct tok_state *tok)
     return c;
 }
 
-static int
-tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const char **p_start, const char **p_end)
-{
-    *p_start = *p_end = NULL;
-    tok->start = tok->cur;
-
-    if (*tok->cur == '{' || *tok->cur == '}') {
-
-        int c = tok_nextc(tok);
-        switch (c) {
-        case '{':
-            if (tok->level >= MAXLEVEL) {
-                return syntaxerror(tok, "too many nested parentheses");
-            }
-            tok->parenstack[tok->level] = c;
-            tok->parenlinenostack[tok->level] = tok->lineno;
-            tok->parencolstack[tok->level] = (int)(tok->start - tok->line_start);
-            tok->level++;
-            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
-            break;
-        case '}':
-            if (!tok->level) {
-                return syntaxerror(tok, "unmatched '%c'", c);
-            }
-            tok->level--;
-            int opening = tok->parenstack[tok->level];
-            if (!((opening == '(' && c == ')') ||
-                (opening == '[' && c == ']') ||
-                (opening == '{' && c == '}')))
-            {
-                if (tok->parenlinenostack[tok->level] != tok->lineno) {
-                    return syntaxerror(tok,
-                            "closing parenthesis '%c' does not match "
-                            "opening parenthesis '%c' on line %d",
-                            c, opening, tok->parenlinenostack[tok->level]);
-                }
-                else {
-                    return syntaxerror(tok,
-                            "closing parenthesis '%c' does not match "
-                            "opening parenthesis '%c'",
-                            c, opening);
-                }
-            }
-
-            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_FSTRING_MODE;
-            break;
-        }
- 
-        /* Punctuation character */
-        *p_start = tok->start;
-        *p_end = tok->cur;
-        return PyToken_OneChar(c);
-    }
-
-    int end_quote_size = 0;
-    while (end_quote_size != current_tok->f_string_quote_size) {
-        int c = tok_nextc(tok);
-        if (c == EOF || (current_tok->f_string_quote_size == 1 && c == '\n')) {
-            assert(tok->multi_line_start != NULL);
-            // shift the tok_state's location into
-            // the start of string, and report the error
-            // from the initial quote character
-            tok->cur = (char *)current_tok->f_string_start;
-            tok->cur++;
-            tok->line_start = current_tok->f_string_multi_line_start;
-            int start = tok->lineno;
-            tok->lineno = tok->first_lineno;
-
-            if (current_tok->f_string_quote_size == 3) {
-                return syntaxerror(tok,
-                                "unterminated triple-quoted string literal"
-                                " (detected at line %d)", start);
-            }
-            else {
-                return syntaxerror(tok,
-                                "unterminated string literal (detected at"
-                                " line %d)", start);
-            }
-        }
-        if (c == current_tok->f_string_quote) {
-            end_quote_size += 1;
-        }
-        else if (c == '{') {
-            tok_backup(tok, c);
-            *p_start = tok->start;
-            *p_end = tok->cur;
-            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
-            return FSTRING_MIDDLE;
-        } else if (c == '}') {
-            tok_backup(tok, c);
-            *p_start = tok->start;
-            *p_end = tok->cur;
-            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
-            return FSTRING_MIDDLE;
- 
-        }
-        else {
-            end_quote_size = 0;
-            if (c == '\\') {
-                tok_nextc(tok);  /* skip escaped char */
-            }
-        }
-    }
-
-    *p_start = tok->start;
-    *p_end = tok->cur-current_tok->f_string_quote_size;
-    tok->tok_mode_stack_index--;
-    return FSTRING_END;
-}
 
 static int
-tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_end)
+tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const char **p_start, const char **p_end)
 {
     int c;
     int blankline, nonascii;
@@ -1672,7 +1564,7 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
     nonascii = 0;
     if (is_potential_identifier_start(c)) {
         /* Process the various legal combinations of b"", r"", u"", and f"". */
-        int saw_b = 0, saw_r = 0, saw_u = 0, saw_f = 0, saw_g = 0;
+        int saw_b = 0, saw_r = 0, saw_u = 0, saw_f = 0;
         while (1) {
             if (!(saw_b || saw_u || saw_f) && (c == 'b' || c == 'B'))
                 saw_b = 1;
@@ -1689,15 +1581,12 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
             else if (!(saw_f || saw_b || saw_u) && (c == 'f' || c == 'F')) {
                 saw_f = 1;
             }
-            else if (!(saw_g || saw_b || saw_u) && (c == 'g' || c == 'G')) {
-                saw_g = 1;
-            }
             else {
                 break;
             }
             c = tok_nextc(tok);
             if (c == '"' || c == '\'') {
-                if (saw_g) {
+                if (saw_f) {
                     goto f_string_quote;
                 }
                 goto letter_quote;
@@ -1747,6 +1636,7 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
 
                 memcpy(&ahead_tok, tok, sizeof(ahead_tok));
                 ahead_tok_kind = tok_get_normal_mode(&ahead_tok,
+                                                     current_tok,
                                                      &ahead_tok_start,
                                                      &ahead_tok_end);
 
@@ -2006,7 +1896,7 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
     }
 
   f_string_quote:
-    if (*tok->start == 'g' && (c == '\'' || c == '"')) {
+    if ((*tok->start == 'f' || *tok->start == 'r') && (c == '\'' || c == '"')) {
         int quote = c;
         int quote_size = 1;             /* 1 or 3 */
 
@@ -2043,6 +1933,10 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
         current_tok->f_string_quote_size = quote_size;
         current_tok->f_string_start = tok->start;
         current_tok->f_string_multi_line_start = tok->line_start;
+
+        current_tok->bracket_stack = 0;
+        current_tok->bracket_mark[0] = 0;
+        current_tok->bracket_mark_index = -1;
         return FSTRING_START;
     }
 
@@ -2168,6 +2062,12 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
         tok->parenlinenostack[tok->level] = tok->lineno;
         tok->parencolstack[tok->level] = (int)(tok->start - tok->line_start);
         tok->level++;
+
+        if ( c == '{' && tok->tok_mode_stack_index > 0) {
+            current_tok->bracket_stack++;
+            printf("Bracket stack increse to: %d\n", current_tok->bracket_stack);
+        }
+
         break;
     case ')':
     case ']':
@@ -2195,9 +2095,16 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
             }
         }
 
-        if (tok->tok_mode_stack_index > 0) {
-            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_FSTRING_MODE;
+        if ( c == '}' && tok->tok_mode_stack_index > 0) {
+
+            printf("Bracket stack decrease to: %d\n", current_tok->bracket_stack - 1);
+            assert(current_tok->bracket_stack >= 0);
+            if (--current_tok->bracket_stack == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
+                current_tok->bracket_mark_index--;
+                current_tok->kind = TOK_FSTRING_MODE;
+            }
         }
+
         break;
     }
 
@@ -2208,11 +2115,92 @@ tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_
 }
 
 static int
+tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const char **p_start, const char **p_end)
+{
+    *p_start = *p_end = NULL;
+    tok->start = tok->cur;
+
+    // If we start with a bracket, we defer to the normal mode as there is nothing for us to tokenize
+    // befor it. TODO: manage touble brackets here!
+    char start_char = *tok->cur;
+    if (start_char == '{' || start_char == '}') {
+        if (start_char == '{') {
+            current_tok->bracket_mark[++current_tok->bracket_mark_index] = current_tok->bracket_stack;
+        }
+        tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+        return tok_get_normal_mode(tok, current_tok, p_start, p_end);
+    }
+
+    int end_quote_size = 0;
+    while (end_quote_size != current_tok->f_string_quote_size) {
+        int c = tok_nextc(tok);
+        if (c == EOF || (current_tok->f_string_quote_size == 1 && c == '\n')) {
+            assert(tok->multi_line_start != NULL);
+            // shift the tok_state's location into
+            // the start of string, and report the error
+            // from the initial quote character
+            tok->cur = (char *)current_tok->f_string_start;
+            tok->cur++;
+            tok->line_start = current_tok->f_string_multi_line_start;
+            int start = tok->lineno;
+            tok->lineno = tok->first_lineno;
+
+            if (current_tok->f_string_quote_size == 3) {
+                return syntaxerror(tok,
+                                "unterminated triple-quoted string literal"
+                                " (detected at line %d)", start);
+            }
+            else {
+                return syntaxerror(tok,
+                                "unterminated string literal (detected at"
+                                " line %d)", start);
+            }
+        }
+        if (c == current_tok->f_string_quote) {
+            end_quote_size += 1;
+        }
+        else if (c == '{') {
+            if (*tok->cur != '{') {
+                tok_backup(tok, c);
+                *p_start = tok->start;
+                *p_end = tok->cur;
+                tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+                current_tok->bracket_mark[++current_tok->bracket_mark_index] = current_tok->bracket_stack;
+                return FSTRING_MIDDLE;
+            }
+            tok_nextc(tok);
+
+        } else if (c == '}') {
+            if (*tok->cur != '}') {
+                tok_backup(tok, c);
+                *p_start = tok->start;
+                *p_end = tok->cur;
+                tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+                return FSTRING_MIDDLE;
+            }
+            tok_nextc(tok);
+        }
+        else {
+            end_quote_size = 0;
+            if (c == '\\') {
+                tok_nextc(tok);  /* skip escaped char */
+            }
+        }
+    }
+
+    *p_start = tok->start;
+    *p_end = tok->cur-current_tok->f_string_quote_size;
+    tok->tok_mode_stack_index--;
+    return FSTRING_END;
+}
+
+
+static int
 tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
 {
     tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
     if (current_tok->kind == TOK_REGULAR_MODE) {
-        return tok_get_normal_mode(tok, p_start, p_end);
+        return tok_get_normal_mode(tok, current_tok, p_start, p_end);
     } else {
         return tok_get_fstring_mode(tok, current_tok, p_start, p_end);
     }
