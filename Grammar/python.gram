@@ -851,9 +851,11 @@ lambda_param[arg_ty]: a=NAME { _PyAST_arg(a->v.Name.id, NULL, NULL, EXTRA) }
 # LITERALS
 # ========
 
-gstring_middle[FStringMiddle*]:
-    | a=FSTRING_MIDDLE? b=gstring_replacement_field { _PyPegen_fstring_middle(p, a, b) }
-
+gstring_middle[expr_ty]:
+    | t='{{' { _PyAST_Constant(t->bytes, NULL, TOKEN_LOC(t)) }
+    | t='}}' { _PyAST_Constant(t->bytes, NULL, TOKEN_LOC(t)) }
+    | gstring_replacement_field
+    | FSTRING_MIDDLE 
 # There are some shenanigans with the gstring_format_spec: Don't try to put it in its own rule
 # or otherwise it will try to parse the first token with the regular tokenizer mode (due to the EXTRA).
 # TODO: (Ideally we need a way similar to 'memo' so the parser can set the tokenize mode on fstring/normal)
@@ -863,7 +865,7 @@ gstring_replacement_field[expr_ty]:
        ] &&'}' { _PyPegen_formatted_value(p, a, conversion, format, EXTRA) }
 gstring_format_spec[expr_ty]: FSTRING_MIDDLE | gstring_replacement_field
 gstring[expr_ty]:
-    | a=FSTRING_START b=gstring_middle* c=FSTRING_END { deal_with_gstring2(p, a, b, c) }
+    | a=FSTRING_START b=gstring_middle* c=FSTRING_END { deal_with_gstring2(p, a, (asdl_expr_seq*)b, c) }
 
 # TODO: Error checking
 string[expr_ty]: s[Token*]=STRING { _PyPegen_constant_from_token(p, s) }

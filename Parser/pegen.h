@@ -114,11 +114,6 @@ typedef struct {
     int is_keyword;
 } KeywordOrStarred;
 
-typedef struct {
-    expr_ty string;
-    expr_ty expression;
-} FStringMiddle;
-
 #if defined(Py_DEBUG)
 void _PyPegen_clear_memo_statistics(void);
 PyObject *_PyPegen_get_memo_statistics(void);
@@ -178,6 +173,7 @@ RAISE_ERROR_KNOWN_LOCATION(Parser *p, PyObject *errtype,
 }
 
 #define UNUSED(expr) do { (void)(expr); } while (0)
+#define TOKEN_LOC(t) (t)->lineno, (t)->col_offset, (t)->end_lineno, (t)->end_col_offset, p->arena
 #define EXTRA_EXPR(head, tail) head->lineno, (head)->col_offset, (tail)->end_lineno, (tail)->end_col_offset, p->arena
 #define EXTRA _start_lineno, _start_col_offset, _end_lineno, _end_col_offset, p->arena
 #define RAISE_SYNTAX_ERROR(msg, ...) _PyPegen_raise_error(p, PyExc_SyntaxError, msg, ##__VA_ARGS__)
@@ -290,7 +286,6 @@ AugOperator *_PyPegen_augoperator(Parser*, operator_ty type);
 stmt_ty _PyPegen_function_def_decorators(Parser *, asdl_expr_seq *, stmt_ty);
 stmt_ty _PyPegen_class_def_decorators(Parser *, asdl_expr_seq *, stmt_ty);
 KeywordOrStarred *_PyPegen_keyword_or_starred(Parser *, void *, int);
-FStringMiddle *_PyPegen_fstring_middle(Parser *, expr_ty, expr_ty);
 asdl_expr_seq *_PyPegen_seq_extract_starred_exprs(Parser *, asdl_seq *);
 asdl_keyword_seq *_PyPegen_seq_delete_starred_exprs(Parser *, asdl_seq *);
 expr_ty _PyPegen_collect_call_seqs(Parser *, asdl_expr_seq *, asdl_seq *,
@@ -339,7 +334,7 @@ void *_PyPegen_arguments_parsing_error(Parser *, expr_ty);
 void *_PyPegen_nonparen_genexp_in_call(Parser *p, expr_ty args);
 
 // TODO: move to the correct place in this file
-expr_ty deal_with_gstring2(Parser *p, Token* a, asdl_seq* expr, Token*b);
+expr_ty deal_with_gstring2(Parser *p, Token* a, asdl_expr_seq* expr, Token*b);
 
 
 // Generated function in parse.c - function definition in python.gram

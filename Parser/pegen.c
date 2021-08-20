@@ -2276,20 +2276,6 @@ _PyPegen_keyword_or_starred(Parser *p, void *element, int is_keyword)
     return a;
 }
 
-
-/* Construct a fstring middle chunk */
-FStringMiddle *
-_PyPegen_fstring_middle(Parser *p, expr_ty the_str, expr_ty expression)
-{
-    FStringMiddle *a = _PyArena_Malloc(p->arena, sizeof(FStringMiddle));
-    if (!a) {
-        return NULL;
-    }
-    a->string = the_str;
-    a->expression = expression;
-    return a;
-}
-
 /* Get the number of starred expressions in an asdl_seq* of KeywordOrStarred*s */
 static int
 _seq_number_of_starred_exprs(asdl_seq *seq)
@@ -2601,27 +2587,51 @@ expr_ty _PyPegen_collect_call_seqs(Parser *p, asdl_expr_seq *a, asdl_seq *b,
                        col_offset, end_lineno, end_col_offset, arena);
 }
 
-expr_ty
-deal_with_gstring2(Parser *p, Token* a, asdl_seq* expr, Token*b) {
-
-    Py_ssize_t valid_expr_items = 0;
-    Py_ssize_t i = 0;
-    for (i= 0; i < asdl_seq_LEN(expr); i++) {
-        FStringMiddle* chunk = (FStringMiddle*)asdl_seq_GET_UNTYPED(expr, i);
-        valid_expr_items += chunk->string == NULL ? 0 : 1;
-        valid_expr_items += 1;
+static expr_ty
+_PyPegen_fstring_bytes_constant_to_unicode(Parser* p, expr_ty constant) {
+    char* bstr = PyBytes_AsString(constant->v.Constant.value);
+    if (bstr == NULL) {
+        return NULL;
     }
-    asdl_expr_seq *seq = _Py_asdl_expr_seq_new(valid_expr_items + 1, p->arena);
+
+    PyObject* str = NULL;
+    if (strcmp(bstr, "{{") == 0 || strcmp(bstr, "}}") == 0) {
+        str = PyUnicode_DecodeUTF8(bstr, 1, "strict");
+    } else {
+        str = PyUnicode_FromString(bstr);
+
+    }
+    if (str == NULL) {
+        return NULL;
+    }
+    if (_PyArena_AddPyObject(p->arena, str) < 0) {
+        Py_DECREF(str);
+        return NULL;
+    }
+    return _PyAST_Constant(str, NULL, constant->lineno, constant->col_offset,
+                           constant->end_lineno, constant->end_col_offset,
+                           p->arena);
+}
+
+expr_ty
+deal_with_gstring2(Parser *p, Token* a, asdl_expr_seq* expr, Token*b) {
+
+    Py_ssize_t n_items = asdl_seq_LEN(expr);
+
+    asdl_expr_seq *seq = _Py_asdl_expr_seq_new(n_items + 1, p->arena);
     if (seq == NULL) {
         return NULL;
     }
-    Py_ssize_t current_pos = 0;
+    Py_ssize_t i = 0;
     for (i= 0; i < asdl_seq_LEN(expr); i++) {
-        FStringMiddle* chunk = (FStringMiddle*)asdl_seq_GET_UNTYPED(expr, i);
-        if (chunk->string != NULL) {
-            asdl_seq_SET(seq,  current_pos++, chunk->string);
-        }
-        asdl_seq_SET(seq,  current_pos++, chunk->expression);
+        expr_ty item = asdl_seq_GET(expr, i);
+        if (item->kind == Constant_kind && PyBytes_CheckExact(item->v.Constant.value)) {
+            item = _PyPegen_fstring_bytes_constant_to_unicode(p, item);
+            if (item == NULL) {
+                return NULL;
+            }
+        } 
+        asdl_seq_SET(seq, i, item);
     }
 
     char* _str = PyBytes_AsString(b->bytes);
@@ -2638,7 +2648,7 @@ deal_with_gstring2(Parser *p, Token* a, asdl_seq* expr, Token*b) {
     if (the_str == NULL) {
         return NULL;
     }
-    asdl_seq_SET(seq, current_pos, the_str);
+    asdl_seq_SET(seq, n_items, the_str);
     return _PyAST_JoinedStr(seq, a->lineno, a->col_offset,
                             b->end_lineno, b->end_col_offset,
                             p->arena);

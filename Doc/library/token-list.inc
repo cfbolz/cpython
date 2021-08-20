@@ -93,6 +93,14 @@
 
    Token value for ``"}"``.
 
+.. data:: DLBRACE
+
+   Token value for ``"{{"``.
+
+.. data:: DRBRACE
+
+   Token value for ``"}}"``.
+
 .. data:: EQEQUAL
 
    Token value for ``"=="``.
