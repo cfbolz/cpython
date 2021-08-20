@@ -891,7 +891,7 @@ _PyPegen_expect_token(Parser *p, int type)
     }
     Token *t = p->tokens[p->mark];
     if (t->type != type) {
-        return NULL;
+       return NULL;
     }
     p->mark += 1;
     return t;
@@ -2279,30 +2279,14 @@ _PyPegen_keyword_or_starred(Parser *p, void *element, int is_keyword)
 
 /* Construct a fstring middle chunk */
 FStringMiddle *
-_PyPegen_fstring_middle(Parser *p, Token *t, expr_ty expression)
+_PyPegen_fstring_middle(Parser *p, expr_ty the_str, expr_ty expression)
 {
     FStringMiddle *a = _PyArena_Malloc(p->arena, sizeof(FStringMiddle));
     if (!a) {
         return NULL;
     }
-    expr_ty the_str = _PyAST_Constant(t->bytes, NULL, t->lineno,
-                                      t->col_offset, t->end_lineno,
-                                      t->end_col_offset, p->arena);
-    if (the_str == NULL) {
-        return NULL;
-    }
     a->string = the_str;
-    // Fix the formatting
-    expr_ty the_expression = _PyAST_FormattedValue(expression, -1,
-                                                   NULL, expression->lineno,
-                                                   expression->col_offset,
-                                                   expression->end_lineno,
-                                                   expression->end_col_offset,
-                                                   p->arena);
-    if (the_expression == NULL) {
-        return NULL;
-    }
-    a->expression = the_expression;
+    a->expression = expression;
     return a;
 }
 
@@ -2638,26 +2622,88 @@ expr_ty _PyPegen_collect_call_seqs(Parser *p, asdl_expr_seq *a, asdl_seq *b,
 
 expr_ty
 deal_with_gstring2(Parser *p, Token* a, asdl_seq* expr, Token*b) {
-    Py_ssize_t expr_items = asdl_seq_LEN(expr);
-    asdl_expr_seq *seq = _Py_asdl_expr_seq_new(expr_items * 2 + 1, p->arena);
+
+    Py_ssize_t valid_expr_items = 0;
+    Py_ssize_t i = 0;
+    for (i= 0; i < asdl_seq_LEN(expr); i++) {
+        FStringMiddle* chunk = (FStringMiddle*)asdl_seq_GET_UNTYPED(expr, i);
+        valid_expr_items += chunk->string == NULL ? 0 : 1;
+        valid_expr_items += 1;
+    }
+    asdl_expr_seq *seq = _Py_asdl_expr_seq_new(valid_expr_items + 1, p->arena);
     if (seq == NULL) {
         return NULL;
     }
-    Py_ssize_t i = 0;
-    for (i= 0; i < expr_items; i++) {
+    Py_ssize_t current_pos = 0;
+    for (i= 0; i < asdl_seq_LEN(expr); i++) {
         FStringMiddle* chunk = (FStringMiddle*)asdl_seq_GET_UNTYPED(expr, i);
-        asdl_seq_SET(seq,  2*i, chunk->string);
-        asdl_seq_SET(seq,  2*i + 1, chunk->expression);
+        if (chunk->string != NULL) {
+            asdl_seq_SET(seq,  current_pos++, chunk->string);
+        }
+        asdl_seq_SET(seq,  current_pos++, chunk->expression);
     }
-    expr_ty the_str = _PyAST_Constant(b->bytes, NULL, b->lineno,
+
+    char* _str = PyBytes_AsString(b->bytes);
+    if (_str == NULL) {
+        return NULL;
+    }
+    PyObject* str = PyUnicode_FromString(_str);
+    if (str == NULL) {
+        return NULL;
+    }
+    expr_ty the_str = _PyAST_Constant(str, NULL, b->lineno,
                               b->col_offset, b->end_lineno,
                               b->end_col_offset, p->arena);
     if (the_str == NULL) {
         return NULL;
     }
-    asdl_seq_SET(seq, expr_items*2, the_str);
+    asdl_seq_SET(seq, current_pos, the_str);
     return _PyAST_JoinedStr(seq, a->lineno, a->col_offset,
                             b->end_lineno, b->end_col_offset,
                             p->arena);
 }
 
+
+expr_ty _PyPegen_fstring_middle_token(Parser* p) {
+    if (p->tok->tok_mode_stack_index == 0) {
+        return NULL;
+    }
+    tokenizer_mode *current_tok = &(p->tok->tok_mode_stack[p->tok->tok_mode_stack_index]);
+    // IF someone is expecting one of this, the tokenizer needs to be forced
+    // into parsing in f-string mode. Notice that this will *force* the token to be FSTRING_MIDDLE
+    // as long as it can be parsed as so.
+
+    // TODO: It would be great if we can actually remove the token if the parsing fails in case the
+    // parser could recover parsing it in normal mode. I have no idea how much work is that.
+    current_tok->kind = TOK_FSTRING_MODE;
+    Token *tok = _PyPegen_expect_token(p, FSTRING_MIDDLE);
+    if (tok == NULL) {
+        return NULL;
+    }
+    char* the_str = PyBytes_AsString(tok->bytes);
+    if (the_str == NULL) {
+        return NULL;
+    }
+    PyObject* str = PyUnicode_FromString(the_str);
+    if (str == NULL) {
+        return NULL;
+    }
+    return _PyAST_Constant(str, NULL, tok->lineno, tok->col_offset, tok->end_lineno, tok->end_col_offset, p->arena);
+}
+
+expr_ty _PyPegen_formatted_value(Parser *p, expr_ty expression, expr_ty conversion,
+                     expr_ty format, int lineno, int col_offset, int end_lineno,
+                     int end_col_offset, PyArena *arena) {
+
+    int conversion_val = -1;
+    if (conversion != NULL) {
+        assert(conversion->kind == Name_kind);
+        if (PyUnicode_GetLength(conversion->v.Name.id) != 1) {
+            RAISE_SYNTAX_ERROR_KNOWN_LOCATION(conversion, "Invalid conversion character");
+            return NULL;
+        }
+        const char* id = PyUnicode_AsUTF8(conversion->v.Name.id);
+        conversion_val = (int)(id[0]);
+    }
+    return _PyAST_FormattedValue(expression, conversion_val, format, lineno, col_offset, end_lineno, end_col_offset, arena);
+}

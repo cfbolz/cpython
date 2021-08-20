@@ -139,6 +139,7 @@ void* _PyPegen_expect_forced_result(Parser *p, void* result, const char* expecte
 Token *_PyPegen_expect_forced_token(Parser *p, int type, const char* expected);
 expr_ty _PyPegen_expect_soft_keyword(Parser *p, const char *keyword);
 expr_ty _PyPegen_soft_keyword_token(Parser *p);
+expr_ty _PyPegen_fstring_middle_token(Parser* p);
 Token *_PyPegen_get_last_nonnwhitespace_token(Parser *);
 int _PyPegen_fill_token(Parser *p);
 expr_ty _PyPegen_name_token(Parser *p);
@@ -284,11 +285,12 @@ StarEtc *_PyPegen_star_etc(Parser *, arg_ty, asdl_seq *, arg_ty);
 arguments_ty _PyPegen_make_arguments(Parser *, asdl_arg_seq *, SlashWithDefault *,
                                      asdl_arg_seq *, asdl_seq *, StarEtc *);
 arguments_ty _PyPegen_empty_arguments(Parser *);
+expr_ty _PyPegen_formatted_value(Parser *, expr_ty, expr_ty, expr_ty, int, int, int, int, PyArena *);
 AugOperator *_PyPegen_augoperator(Parser*, operator_ty type);
 stmt_ty _PyPegen_function_def_decorators(Parser *, asdl_expr_seq *, stmt_ty);
 stmt_ty _PyPegen_class_def_decorators(Parser *, asdl_expr_seq *, stmt_ty);
 KeywordOrStarred *_PyPegen_keyword_or_starred(Parser *, void *, int);
-FStringMiddle *_PyPegen_fstring_middle(Parser *, Token *, expr_ty);
+FStringMiddle *_PyPegen_fstring_middle(Parser *, expr_ty, expr_ty);
 asdl_expr_seq *_PyPegen_seq_extract_starred_exprs(Parser *, asdl_seq *);
 asdl_keyword_seq *_PyPegen_seq_delete_starred_exprs(Parser *, asdl_seq *);
 expr_ty _PyPegen_collect_call_seqs(Parser *, asdl_expr_seq *, asdl_seq *,

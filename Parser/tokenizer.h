@@ -36,6 +36,8 @@ typedef struct _tokenizer_mode {
     enum tokenizer_mode_kind_t kind;
     char f_string_quote;
     int f_string_quote_size;
+    const char* f_string_start; 
+    const char* f_string_multi_line_start; 
 } tokenizer_mode;
 
 /* Tokenizer state */

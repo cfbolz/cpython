@@ -1345,14 +1345,121 @@ tok_decimal_tail(struct tok_state *tok)
     return c;
 }
 
-/* Get next token, after space stripping etc. */
+static int
+tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const char **p_start, const char **p_end)
+{
+    *p_start = *p_end = NULL;
+    tok->start = tok->cur;
+
+    if (*tok->cur == '{' || *tok->cur == '}') {
+
+        int c = tok_nextc(tok);
+        switch (c) {
+        case '{':
+            if (tok->level >= MAXLEVEL) {
+                return syntaxerror(tok, "too many nested parentheses");
+            }
+            tok->parenstack[tok->level] = c;
+            tok->parenlinenostack[tok->level] = tok->lineno;
+            tok->parencolstack[tok->level] = (int)(tok->start - tok->line_start);
+            tok->level++;
+            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+            break;
+        case '}':
+            if (!tok->level) {
+                return syntaxerror(tok, "unmatched '%c'", c);
+            }
+            tok->level--;
+            int opening = tok->parenstack[tok->level];
+            if (!((opening == '(' && c == ')') ||
+                (opening == '[' && c == ']') ||
+                (opening == '{' && c == '}')))
+            {
+                if (tok->parenlinenostack[tok->level] != tok->lineno) {
+                    return syntaxerror(tok,
+                            "closing parenthesis '%c' does not match "
+                            "opening parenthesis '%c' on line %d",
+                            c, opening, tok->parenlinenostack[tok->level]);
+                }
+                else {
+                    return syntaxerror(tok,
+                            "closing parenthesis '%c' does not match "
+                            "opening parenthesis '%c'",
+                            c, opening);
+                }
+            }
+
+            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_FSTRING_MODE;
+            break;
+        }
+ 
+        /* Punctuation character */
+        *p_start = tok->start;
+        *p_end = tok->cur;
+        return PyToken_OneChar(c);
+    }
+
+    int end_quote_size = 0;
+    while (end_quote_size != current_tok->f_string_quote_size) {
+        int c = tok_nextc(tok);
+        if (c == EOF || (current_tok->f_string_quote_size == 1 && c == '\n')) {
+            assert(tok->multi_line_start != NULL);
+            // shift the tok_state's location into
+            // the start of string, and report the error
+            // from the initial quote character
+            tok->cur = (char *)current_tok->f_string_start;
+            tok->cur++;
+            tok->line_start = current_tok->f_string_multi_line_start;
+            int start = tok->lineno;
+            tok->lineno = tok->first_lineno;
+
+            if (current_tok->f_string_quote_size == 3) {
+                return syntaxerror(tok,
+                                "unterminated triple-quoted string literal"
+                                " (detected at line %d)", start);
+            }
+            else {
+                return syntaxerror(tok,
+                                "unterminated string literal (detected at"
+                                " line %d)", start);
+            }
+        }
+        if (c == current_tok->f_string_quote) {
+            end_quote_size += 1;
+        }
+        else if (c == '{') {
+            tok_backup(tok, c);
+            *p_start = tok->start;
+            *p_end = tok->cur;
+            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+            return FSTRING_MIDDLE;
+        } else if (c == '}') {
+            tok_backup(tok, c);
+            *p_start = tok->start;
+            *p_end = tok->cur;
+            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+            return FSTRING_MIDDLE;
+ 
+        }
+        else {
+            end_quote_size = 0;
+            if (c == '\\') {
+                tok_nextc(tok);  /* skip escaped char */
+            }
+        }
+    }
+
+    *p_start = tok->start;
+    *p_end = tok->cur-current_tok->f_string_quote_size;
+    tok->tok_mode_stack_index--;
+    return FSTRING_END;
+}
 
 static int
-tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
+tok_get_normal_mode(struct tok_state *tok, const char **p_start, const char **p_end)
 {
     int c;
     int blankline, nonascii;
-
     *p_start = *p_end = NULL;
   nextline:
     tok->start = NULL;
@@ -1490,30 +1597,6 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
 
     /* Set start of current token */
     tok->start = tok->cur - 1;
-
-    tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
-    if (current_tok->kind == TOK_FSTRING_MODE) {
-        while (c != '{' && c != current_tok->f_string_quote) {
-            c = tok_nextc(tok);
-        }
-        if (c == '{') {
-            tok_backup(tok, c);
-            *p_start = tok->start;
-            *p_end = tok->cur;
-            tok->tok_mode_stack[++tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
-            printf ("fstring middle: '%.*s'\n", (int)(*p_end-*p_start), tok->start);
-            return FSTRING_MIDDLE;
-        } else {
-            *p_start = tok->start;
-            *p_end = tok->cur;
-            tok->tok_mode_stack_index--;
-            printf ("fstring middle: '%.*s'\n", (int)(*p_end-*p_start), tok->start);
-            return FSTRING_END;
-        }
-        // TODO: Remove this or fix
-        __asm__("int3");
-    }
-
     /* Skip comment, unless it's a type comment */
     if (c == '#') {
         const char *prefix, *p, *type_start;
@@ -1663,8 +1746,9 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
                 int ahead_tok_kind;
 
                 memcpy(&ahead_tok, tok, sizeof(ahead_tok));
-                ahead_tok_kind = tok_get(&ahead_tok, &ahead_tok_start,
-                                         &ahead_tok_end);
+                ahead_tok_kind = tok_get_normal_mode(&ahead_tok,
+                                                     &ahead_tok_start,
+                                                     &ahead_tok_end);
 
                 if (ahead_tok_kind == NAME
                     && ahead_tok.cur - ahead_tok.start == 3
@@ -1925,22 +2009,29 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
     if (*tok->start == 'g' && (c == '\'' || c == '"')) {
         int quote = c;
         int quote_size = 1;             /* 1 or 3 */
-        int end_quote_size = 0;
+
+        /* Nodes of type STRING, especially multi line strings
+           must be handled differently in order to get both
+           the starting line number and the column offset right.
+           (cf. issue 16806) */
+        tok->first_lineno = tok->lineno;
+        tok->multi_line_start = tok->line_start;
 
         /* Find the quote size and start of string */
-        c = tok_nextc(tok);
-        if (c == quote) {
-            c = tok_nextc(tok);
-            if (c == quote) {
+        int after_quote = tok_nextc(tok);
+        if (after_quote == quote) {
+            int after_after_quote = tok_nextc(tok);
+            if (after_after_quote == quote) {
                 quote_size = 3;
             }
             else {
-                // TODO: What should we do here?
-                end_quote_size = 1;     /* empty string found */
+                // TODO: Check this
+                tok_backup(tok, after_after_quote);
+                tok_backup(tok, after_quote);
             }
         }
-        if (c != quote) {
-            tok_backup(tok, c);
+        if (after_quote != quote) {
+            tok_backup(tok, after_quote);
         }
 
 
@@ -1950,7 +2041,8 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
         current_tok->kind = TOK_FSTRING_MODE;
         current_tok->f_string_quote = quote;
         current_tok->f_string_quote_size = quote_size;
-        printf ("fstring start: '%.*s'\n", (int)(*p_end-*p_start), tok->start);
+        current_tok->f_string_start = tok->start;
+        current_tok->f_string_multi_line_start = tok->line_start;
         return FSTRING_START;
     }
 
@@ -2104,8 +2196,7 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
         }
 
         if (tok->tok_mode_stack_index > 0) {
-            tok->tok_mode_stack_index--;
-            printf("Decreasing stack mode to %d\n", tok->tok_mode_stack[tok->tok_mode_stack_index].kind);
+            tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_FSTRING_MODE;
         }
         break;
     }
@@ -2114,6 +2205,17 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
     *p_start = tok->start;
     *p_end = tok->cur;
     return PyToken_OneChar(c);
+}
+
+static int
+tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
+{
+    tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
+    if (current_tok->kind == TOK_REGULAR_MODE) {
+        return tok_get_normal_mode(tok, p_start, p_end);
+    } else {
+        return tok_get_fstring_mode(tok, current_tok, p_start, p_end);
+    }
 }
 
 int

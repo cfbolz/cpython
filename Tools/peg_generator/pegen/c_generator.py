@@ -62,6 +62,7 @@ class NodeTypes(Enum):
     KEYWORD = 4
     SOFT_KEYWORD = 5
     CUT_OPERATOR = 6
+    F_STRING_CHUNK = 7
 
 
 BASE_NODETYPES = {
@@ -69,6 +70,7 @@ BASE_NODETYPES = {
     "NUMBER": NodeTypes.NUMBER_TOKEN,
     "STRING": NodeTypes.STRING_TOKEN,
     "SOFT_KEYWORD": NodeTypes.SOFT_KEYWORD,
+    "FSTRING_MIDDLE": NodeTypes.F_STRING_CHUNK,
 }
 
 

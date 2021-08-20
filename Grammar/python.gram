@@ -853,9 +853,18 @@ lambda_param[arg_ty]: a=NAME { _PyAST_arg(a->v.Name.id, NULL, NULL, EXTRA) }
 # ========
 
 gstring_middle[FStringMiddle*]:
-    | FSTRING_MIDDLE '{' b=expression '}' { _PyPegen_fstring_middle(p, a, b) }
+    | a=FSTRING_MIDDLE? b=gstring_replacement_field { _PyPegen_fstring_middle(p, a, b) }
 
-gstring[expr_ty]:
+# There are some shenanigans with the gstring_format_spec: Don't try to put it in its own rule
+# or otherwise it will try to parse the first token with the regular tokenizer mode (due to the EXTRA).
+# TODO: (Ideally we need a way similar to 'memo' so the parser can set the tokenize mode on fstring/normal)
+gstring_replacement_field[expr_ty]:
+    | '{' a=expression conversion=["!" conv=NAME {conv} ] format=[ ':' spec=gstring_format_spec* {
+            spec ?_PyAST_JoinedStr((asdl_expr_seq*)spec, EXTRA) : NULL }
+       ] &&'}' { _PyPegen_formatted_value(p, a, conversion, format, EXTRA) }
+gstring_format_spec[expr_ty]: FSTRING_MIDDLE | gstring_replacement_field
+
+gstring[expr_ty] (memo):
     | a=FSTRING_START b=gstring_middle* c=FSTRING_END { deal_with_gstring2(p, a, b, c) }
 
 strings[expr_ty] (memo): a=STRING+ { _PyPegen_concatenate_strings(p, a) }
