@@ -204,6 +204,7 @@ _PyPegen_parsestr(Parser *p, int *bytesmode, int *rawmode, PyObject **result,
         return -1;
     }
     if (quote != '\'' && quote != '\"') {
+        __asm__("int3");
         PyErr_BadInternalCall();
         return -1;
     }

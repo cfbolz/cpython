@@ -374,10 +374,16 @@ tok_reserve_buf(struct tok_state *tok, Py_ssize_t size)
     Py_ssize_t oldsize = tok->inp - tok->buf;
     Py_ssize_t newsize = oldsize + Py_MAX(size, oldsize >> 1);
     if (newsize > tok->end - tok->buf) {
+        tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
         char *newbuf = tok->buf;
         Py_ssize_t start = tok->start == NULL ? -1 : tok->start - tok->buf;
         Py_ssize_t line_start = tok->start == NULL ? -1 : tok->line_start - tok->buf;
         Py_ssize_t multi_line_start = tok->multi_line_start - tok->buf;
+
+        // TODO: Fix f-string buffer references
+        Py_ssize_t fstring_start = current_tok->f_string_start == NULL ? -1 : current_tok->f_string_start - tok->buf;
+        Py_ssize_t fstring_multi_line_start = current_tok->f_string_multi_line_start - tok->buf;
+
         newbuf = (char *)PyMem_Realloc(newbuf, newsize);
         if (newbuf == NULL) {
             tok->done = E_NOMEM;
@@ -390,6 +396,8 @@ tok_reserve_buf(struct tok_state *tok, Py_ssize_t size)
         tok->start = start < 0 ? NULL : tok->buf + start;
         tok->line_start = line_start < 0 ? NULL : tok->buf + line_start;
         tok->multi_line_start = multi_line_start < 0 ? NULL : tok->buf + multi_line_start;
+        current_tok->f_string_start = fstring_start < 0 ? NULL : tok->buf + fstring_start;
+        current_tok->f_string_multi_line_start= fstring_multi_line_start < 0 ? NULL : tok->buf + fstring_multi_line_start;
     }
     return 1;
 }
@@ -904,7 +912,10 @@ tok_underflow_interactive(struct tok_state *tok) {
         tok->done = E_EOF;
     }
     else if (tok->start != NULL) {
+        tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
         Py_ssize_t cur_multi_line_start = tok->multi_line_start - tok->buf;
+        // TODO: Fix *all* levels of f-string multiline start
+        Py_ssize_t cur_fstring_multi_line_start = current_tok->f_string_multi_line_start - tok->buf;
         size_t size = strlen(newtok);
         tok->lineno++;
         if (!tok_reserve_buf(tok, size + 1)) {
@@ -917,6 +928,7 @@ tok_underflow_interactive(struct tok_state *tok) {
         PyMem_Free(newtok);
         tok->inp += size;
         tok->multi_line_start = tok->buf + cur_multi_line_start;
+        current_tok->f_string_multi_line_start = tok->buf + cur_fstring_multi_line_start;
     }
     else {
         tok->lineno++;
@@ -1566,7 +1578,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
     nonascii = 0;
     if (is_potential_identifier_start(c)) {
         /* Process the various legal combinations of b"", r"", u"", and f"". */
-        int saw_b = 0, saw_r = 0, saw_u = 0, saw_f = 0, saw_g = 0;
+        int saw_b = 0, saw_r = 0, saw_u = 0, saw_f = 0;
         while (1) {
             if (!(saw_b || saw_u || saw_f) && (c == 'b' || c == 'B'))
                 saw_b = 1;
@@ -1583,15 +1595,12 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
             else if (!(saw_f || saw_b || saw_u) && (c == 'f' || c == 'F')) {
                 saw_f = 1;
             }
-            else if (!(saw_g || saw_b || saw_u) && (c == 'g' || c == 'G')) {
-                saw_g = 1;
-            }
             else {
                 break;
             }
             c = tok_nextc(tok);
             if (c == '"' || c == '\'') {
-                if (saw_g) {
+                if (saw_f) {
                     goto f_string_quote;
                 }
                 goto letter_quote;
@@ -1901,7 +1910,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
     }
 
   f_string_quote:
-    if ((*tok->start == 'g' && (c == '\'' || c == '"'))) {
+    if (((*tok->start == 'f' || *tok->start == 'r') && (c == '\'' || c == '"'))) {
         int quote = c;
         int quote_size = 1;             /* 1 or 3 */
 
