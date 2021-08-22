@@ -70,7 +70,6 @@ BASE_NODETYPES = {
     "NUMBER": NodeTypes.NUMBER_TOKEN,
     "STRING": NodeTypes.STRING_TOKEN,
     "SOFT_KEYWORD": NodeTypes.SOFT_KEYWORD,
-    "FSTRING_MIDDLE": NodeTypes.F_STRING_CHUNK,
 }
 
 

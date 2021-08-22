@@ -33,8 +33,6 @@ const char * const _PyParser_TokenNames[] = {
     "PERCENT",
     "LBRACE",
     "RBRACE",
-    "DLBRACE",
-    "DRBRACE",
     "EQEQUAL",
     "NOTEQUAL",
     "LESSEQUAL",
@@ -188,19 +186,9 @@ PyToken_TwoChars(int c1, int c2)
         case '=': return CIRCUMFLEXEQUAL;
         }
         break;
-    case '{':
-        switch (c2) {
-        case '{': return DLBRACE;
-        }
-        break;
     case '|':
         switch (c2) {
         case '=': return VBAREQUAL;
-        }
-        break;
-    case '}':
-        switch (c2) {
-        case '}': return DRBRACE;
         }
         break;
     }

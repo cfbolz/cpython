@@ -108,6 +108,7 @@ struct tok_state {
     // TODO: Factor this into its own thing
     tokenizer_mode tok_mode_stack[MAXLEVEL];
     int tok_mode_stack_index;
+    int blech;
 };
 
 extern struct tok_state *PyTokenizer_FromString(const char *, int);
@@ -116,6 +117,7 @@ extern struct tok_state *PyTokenizer_FromFile(FILE *, const char*,
                                               const char *, const char *);
 extern void PyTokenizer_Free(struct tok_state *);
 extern int PyTokenizer_Get(struct tok_state *, const char **, const char **);
+extern struct tok_state * tok_new(void);
 
 #define tok_dump _Py_tok_dump
 

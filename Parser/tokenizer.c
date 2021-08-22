@@ -36,7 +36,7 @@
 #define TABSIZE 8
 
 /* Forward */
-static struct tok_state *tok_new(void);
+struct tok_state *tok_new(void);
 static int tok_nextc(struct tok_state *tok);
 static void tok_backup(struct tok_state *tok, int c);
 
@@ -47,7 +47,7 @@ static const char* type_comment_prefix = "# type: ";
 
 /* Create and initialize a new tok_state structure */
 
-static struct tok_state *
+struct tok_state *
 tok_new(void)
 {
     struct tok_state *tok = (struct tok_state *)PyMem_Malloc(
@@ -89,6 +89,8 @@ tok_new(void)
 
     tok->tok_mode_stack[0] = (tokenizer_mode){.kind =TOK_REGULAR_MODE, .f_string_quote='\0', .f_string_quote_size = 0};
     tok->tok_mode_stack_index = 0;
+
+    tok->blech = 0;
     return tok;
 }
 
@@ -1035,7 +1037,7 @@ tok_nextc(struct tok_state *tok)
         }
         if (tok->done != E_OK)
             return EOF;
-        if (tok->fp == NULL) {
+        if (tok->fp == NULL && !tok->blech) {
             rc = tok_underflow_string(tok);
         }
         else if (tok->prompt != NULL) {
@@ -1564,7 +1566,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
     nonascii = 0;
     if (is_potential_identifier_start(c)) {
         /* Process the various legal combinations of b"", r"", u"", and f"". */
-        int saw_b = 0, saw_r = 0, saw_u = 0, saw_f = 0;
+        int saw_b = 0, saw_r = 0, saw_u = 0, saw_f = 0, saw_g = 0;
         while (1) {
             if (!(saw_b || saw_u || saw_f) && (c == 'b' || c == 'B'))
                 saw_b = 1;
@@ -1581,12 +1583,15 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
             else if (!(saw_f || saw_b || saw_u) && (c == 'f' || c == 'F')) {
                 saw_f = 1;
             }
+            else if (!(saw_g || saw_b || saw_u) && (c == 'g' || c == 'G')) {
+                saw_g = 1;
+            }
             else {
                 break;
             }
             c = tok_nextc(tok);
             if (c == '"' || c == '\'') {
-                if (saw_f) {
+                if (saw_g) {
                     goto f_string_quote;
                 }
                 goto letter_quote;
@@ -1896,7 +1901,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
     }
 
   f_string_quote:
-    if ((*tok->start == 'f' || *tok->start == 'r') && (c == '\'' || c == '"')) {
+    if ((*tok->start == 'g' && (c == '\'' || c == '"'))) {
         int quote = c;
         int quote_size = 1;             /* 1 or 3 */
 
@@ -2063,9 +2068,8 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
         tok->parencolstack[tok->level] = (int)(tok->start - tok->line_start);
         tok->level++;
 
-        if ( c == '{' && tok->tok_mode_stack_index > 0) {
+        if (tok->tok_mode_stack_index > 0) {
             current_tok->bracket_stack++;
-            printf("Bracket stack increse to: %d\n", current_tok->bracket_stack);
         }
 
         break;
@@ -2095,23 +2099,27 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
             }
         }
 
-        if ( c == '}' && tok->tok_mode_stack_index > 0) {
-
-            printf("Bracket stack decrease to: %d\n", current_tok->bracket_stack - 1);
-            assert(current_tok->bracket_stack >= 0);
-            if (--current_tok->bracket_stack == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
+        if ( tok->tok_mode_stack_index > 0) {
+            current_tok->bracket_stack--;
+            if (c == '}' && current_tok->bracket_stack == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
                 current_tok->bracket_mark_index--;
                 current_tok->kind = TOK_FSTRING_MODE;
             }
         }
-
         break;
     }
 
     /* Punctuation character */
     *p_start = tok->start;
     *p_end = tok->cur;
-    return PyToken_OneChar(c);
+    int token = PyToken_OneChar(c);
+
+    if (tok->tok_mode_stack_index > 0 && token == COLON) {
+        if (current_tok->bracket_stack - 1 == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
+            current_tok->kind = TOK_FSTRING_MODE;
+        }
+    }
+    return token;
 }
 
 static int
@@ -2121,9 +2129,13 @@ tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const c
     tok->start = tok->cur;
 
     // If we start with a bracket, we defer to the normal mode as there is nothing for us to tokenize
-    // befor it. TODO: manage touble brackets here!
-    char start_char = *tok->cur;
-    if (start_char == '{' || start_char == '}') {
+    // befor it. 
+    char start_char = tok_nextc(tok);
+    char peek = tok_nextc(tok);
+    tok_backup(tok, peek);
+    tok_backup(tok, start_char);
+
+    if ((start_char == '{' && peek != '{') || (start_char == '}' && peek != '}')) {
         if (start_char == '{') {
             current_tok->bracket_mark[++current_tok->bracket_mark_index] = current_tok->bracket_stack;
         }
@@ -2147,12 +2159,12 @@ tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const c
 
             if (current_tok->f_string_quote_size == 3) {
                 return syntaxerror(tok,
-                                "unterminated triple-quoted string literal"
+                                "unterminated triple-quoted f-string literal"
                                 " (detected at line %d)", start);
             }
             else {
                 return syntaxerror(tok,
-                                "unterminated string literal (detected at"
+                                "unterminated f-string literal (detected at"
                                 " line %d)", start);
             }
         }
@@ -2160,25 +2172,32 @@ tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const c
             end_quote_size += 1;
         }
         else if (c == '{') {
-            if (*tok->cur != '{') {
+            char peek = tok_nextc(tok);
+            if (peek != '{') {
+                tok_backup(tok, peek);
                 tok_backup(tok, c);
-                *p_start = tok->start;
-                *p_end = tok->cur;
-                tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
                 current_tok->bracket_mark[++current_tok->bracket_mark_index] = current_tok->bracket_stack;
-                return FSTRING_MIDDLE;
-            }
-            tok_nextc(tok);
-
-        } else if (c == '}') {
-            if (*tok->cur != '}') {
-                tok_backup(tok, c);
+                tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
                 *p_start = tok->start;
                 *p_end = tok->cur;
-                tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
-                return FSTRING_MIDDLE;
+            } else {
+                *p_start = tok->start;
+                *p_end = tok->cur - 1;
             }
-            tok_nextc(tok);
+            return FSTRING_MIDDLE;
+        } else if (c == '}') {
+            char peek = tok_nextc(tok);
+            if (peek != '}') {
+                tok_backup(tok, peek);
+                tok_backup(tok, c);
+                tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
+                *p_start = tok->start;
+                *p_end = tok->cur;
+            } else {
+                *p_start = tok->start;
+                *p_end = tok->cur - 1;
+            }
+            return FSTRING_MIDDLE;
         }
         else {
             end_quote_size = 0;
