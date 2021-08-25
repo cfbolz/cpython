@@ -1515,6 +1515,11 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
     tok->start = tok->cur - 1;
     /* Skip comment, unless it's a type comment */
     if (c == '#') {
+
+        if (tok->tok_mode_stack_index > 0) {
+            return syntaxerror(tok, "f-string expression part cannot include '#'");
+        }
+
         const char *prefix, *p, *type_start;
 
         while (c != EOF && c != '\n') {
@@ -2065,6 +2070,14 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
         goto again; /* Read next line */
     }
 
+    /* Punctuation character */
+    if (tok->tok_mode_stack_index > 0 && c == ':' && current_tok->bracket_stack - 1 == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
+        current_tok->kind = TOK_FSTRING_MODE;
+        *p_start = tok->start;
+        *p_end = tok->cur;
+        return PyToken_OneChar(c);
+    }
+
     /* Check for two-character token */
     {
         int c2 = tok_nextc(tok);
@@ -2142,14 +2155,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
     /* Punctuation character */
     *p_start = tok->start;
     *p_end = tok->cur;
-    int token = PyToken_OneChar(c);
-
-    if (tok->tok_mode_stack_index > 0 && token == COLON) {
-        if (current_tok->bracket_stack - 1 == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
-            current_tok->kind = TOK_FSTRING_MODE;
-        }
-    }
-    return token;
+    return PyToken_OneChar(c);
 }
 
 static int
