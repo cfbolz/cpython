@@ -352,6 +352,24 @@ tok_concatenate_interactive_new_line(struct tok_state *tok, const char *line) {
 }
 
 
+/* Traverse and update all f-string buffers with the value */
+static void
+update_fstring_buffers(struct tok_state *tok, char value, int regular, int multiline)
+{
+    int index;
+    tokenizer_mode *mode;
+
+    for (index = tok->tok_mode_stack_index; index >= 0; --index) {
+        mode = &(tok->tok_mode_stack[index]);
+        if (regular && mode->f_string_start != NULL) {
+            mode->f_string_start += value;
+        }
+        if (multiline && mode->f_string_multi_line_start != NULL) {
+            mode->f_string_multi_line_start += value;
+        }
+    }
+}
+
 /* Read a line of text from TOK into S, using the stream in TOK.
    Return NULL on failure, else S.
 
@@ -374,16 +392,11 @@ tok_reserve_buf(struct tok_state *tok, Py_ssize_t size)
     Py_ssize_t oldsize = tok->inp - tok->buf;
     Py_ssize_t newsize = oldsize + Py_MAX(size, oldsize >> 1);
     if (newsize > tok->end - tok->buf) {
-        tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
         char *newbuf = tok->buf;
         Py_ssize_t start = tok->start == NULL ? -1 : tok->start - tok->buf;
         Py_ssize_t line_start = tok->start == NULL ? -1 : tok->line_start - tok->buf;
         Py_ssize_t multi_line_start = tok->multi_line_start - tok->buf;
-
-        // TODO: Fix f-string buffer references
-        Py_ssize_t fstring_start = current_tok->f_string_start == NULL ? -1 : current_tok->f_string_start - tok->buf;
-        Py_ssize_t fstring_multi_line_start = current_tok->f_string_multi_line_start - tok->buf;
-
+        update_fstring_buffers(tok, -*tok->buf, /*regular=*/1, /*multiline=*/1);
         newbuf = (char *)PyMem_Realloc(newbuf, newsize);
         if (newbuf == NULL) {
             tok->done = E_NOMEM;
@@ -396,8 +409,7 @@ tok_reserve_buf(struct tok_state *tok, Py_ssize_t size)
         tok->start = start < 0 ? NULL : tok->buf + start;
         tok->line_start = line_start < 0 ? NULL : tok->buf + line_start;
         tok->multi_line_start = multi_line_start < 0 ? NULL : tok->buf + multi_line_start;
-        current_tok->f_string_start = fstring_start < 0 ? NULL : tok->buf + fstring_start;
-        current_tok->f_string_multi_line_start= fstring_multi_line_start < 0 ? NULL : tok->buf + fstring_multi_line_start;
+        update_fstring_buffers(tok, *tok->buf, /*regular=*/1, /*multiline=*/1);
     }
     return 1;
 }
@@ -912,10 +924,8 @@ tok_underflow_interactive(struct tok_state *tok) {
         tok->done = E_EOF;
     }
     else if (tok->start != NULL) {
-        tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
         Py_ssize_t cur_multi_line_start = tok->multi_line_start - tok->buf;
-        // TODO: Fix *all* levels of f-string multiline start
-        Py_ssize_t cur_fstring_multi_line_start = current_tok->f_string_multi_line_start - tok->buf;
+        update_fstring_buffers(tok, -*tok->buf, /*regular=*/0, /*multiline=*/1);
         size_t size = strlen(newtok);
         tok->lineno++;
         if (!tok_reserve_buf(tok, size + 1)) {
@@ -928,7 +938,7 @@ tok_underflow_interactive(struct tok_state *tok) {
         PyMem_Free(newtok);
         tok->inp += size;
         tok->multi_line_start = tok->buf + cur_multi_line_start;
-        current_tok->f_string_multi_line_start = tok->buf + cur_fstring_multi_line_start;
+        update_fstring_buffers(tok, *tok->buf, /*regular=*/0, /*multiline=*/1);
     }
     else {
         tok->lineno++;
@@ -1081,7 +1091,7 @@ tok_backup(struct tok_state *tok, int c)
         if (--tok->cur < tok->buf) {
             Py_FatalError("tokenizer beginning of buffer");
         }
-        if ((int)(unsigned char)*tok->cur != c) {
+        if ((int)(unsigned char)*tok->cur != Py_CHARMASK(c)) {
             Py_FatalError("tok_backup: wrong character");
         }
     }
@@ -1948,6 +1958,17 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
         current_tok->f_string_start = tok->start;
         current_tok->f_string_multi_line_start = tok->line_start;
 
+        switch (*tok->start) {
+            case 'f':
+                current_tok->f_string_raw = *(tok->start + 1) == 'r';
+                break;
+            case 'r':
+                current_tok->f_string_raw = 1;
+                break;
+            default:
+                Py_UNREACHABLE();
+        }
+
         current_tok->bracket_stack = 0;
         current_tok->bracket_mark[0] = 0;
         current_tok->bracket_mark_index = -1;
@@ -2153,6 +2174,7 @@ tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const c
     }
 
     int end_quote_size = 0;
+    int unicode_escape = 0;
     while (end_quote_size != current_tok->f_string_quote_size) {
         int c = tok_nextc(tok);
         if (c == EOF || (current_tok->f_string_quote_size == 1 && c == '\n')) {
@@ -2195,8 +2217,13 @@ tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const c
             }
             return FSTRING_MIDDLE;
         } else if (c == '}') {
+            if (unicode_escape) {
+                *p_start = tok->start;
+                *p_end = tok->cur;
+                return FSTRING_MIDDLE;
+            }
             char peek = tok_nextc(tok);
-            if (peek != '}') {
+            if (!(peek == '}' && current_tok->bracket_mark_index <= 0)) {
                 tok_backup(tok, peek);
                 tok_backup(tok, c);
                 tok->tok_mode_stack[tok->tok_mode_stack_index].kind = TOK_REGULAR_MODE;
@@ -2208,10 +2235,19 @@ tok_get_fstring_mode(struct tok_state *tok, tokenizer_mode* current_tok, const c
             }
             return FSTRING_MIDDLE;
         }
-        else {
+        else if (!current_tok->f_string_raw) {
             end_quote_size = 0;
             if (c == '\\') {
-                tok_nextc(tok);  /* skip escaped char */
+                char peek = tok_nextc(tok);
+                if (peek == 'N') {
+                    /* Handle named unicode escapes (\N{BULLET}) */
+                    peek = tok_nextc(tok);
+                    if (peek == '{') {
+                        unicode_escape = 1;
+                    } else {
+                        tok_backup(tok, peek);
+                    }
+                }
             }
         }
     }
