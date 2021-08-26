@@ -2023,6 +2023,19 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
                 int start = tok->lineno;
                 tok->lineno = tok->first_lineno;
 
+                if (tok->tok_mode_stack_index > 0) {
+                    /* When we are in an f-string, before raising the
+                     * unterminated string literal error, check whether
+                     * does the initial quote matches with f-strings quotes
+                     * and if it is, then this must be a missing '}' token
+                     * so raise the proper error */
+                    tokenizer_mode *current_tok = &(tok->tok_mode_stack[tok->tok_mode_stack_index]);
+                    if (current_tok->f_string_quote == quote &&
+                        current_tok->f_string_quote_size == quote_size) {
+                        return syntaxerror(tok, "f-string: expecting '}'", start);
+                    }
+                }
+
                 if (quote_size == 3) {
                     return syntaxerror(tok,
                                        "unterminated triple-quoted string literal"
@@ -2142,7 +2155,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, const ch
             }
         }
 
-        if ( tok->tok_mode_stack_index > 0) {
+        if (tok->tok_mode_stack_index > 0) {
             current_tok->bracket_stack--;
             if (c == '}' && current_tok->bracket_stack == current_tok->bracket_mark[current_tok->bracket_mark_index]) {
                 current_tok->bracket_mark_index--;
