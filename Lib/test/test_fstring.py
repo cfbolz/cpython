@@ -1189,13 +1189,10 @@ x = (
         pi = 'π'
         self.assertEqual(f'alpha α {pi=} ω omega', "alpha α pi='π' ω omega")
 
-        ###remove!
-        """
         # Check multi-line expressions.
         self.assertEqual(f'''{
 3
 =}''', '\n3\n=3')
-        """
 
         # Since = is handled specially, make sure all existing uses of
         # it still work.
@@ -1252,6 +1249,7 @@ x = (
         self.assertEqual(f'X{x  =}Y', 'Xx  ='+repr(x)+'Y')
         self.assertEqual(f'X{x=  }Y', 'Xx=  '+repr(x)+'Y')
         self.assertEqual(f'X{x  =  }Y', 'Xx  =  '+repr(x)+'Y')
+        self.assertEqual(f"sadsd {1 + 1 =  :{1 + 1:1d}f}", "sadsd 1 + 1 =  2.000000")
 
         # These next lines contains tabs.  Backslash escapes don't
         # work in f-strings.
