@@ -268,6 +268,17 @@ class CCallMakerVisitor(GrammarVisitor):
                 return_type="Token *",
                 comment=f"forced_token='{val}'",
             )
+        elif call.nodetype == NodeTypes.KEYWORD:
+            keyword = node.node.value.strip("'")
+            type = self.keyword_cache[keyword]
+            return FunctionCall(
+                assigned_variable="_keyword",
+                function=f"_PyPegen_expect_forced_token",
+                arguments=["p", type, f'"{keyword}"'],
+                nodetype=NodeTypes.KEYWORD,
+                return_type="Token *",
+                comment=f"forced_token='{keyword}'",
+            )
         else:
             raise NotImplementedError(
                     f"Forced tokens don't work with {call.nodetype} tokens")
