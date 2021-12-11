@@ -1715,8 +1715,11 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
             VISIT(st, expr, e->v.Slice.step)
         break;
     case Name_kind:
-        if (!symtable_add_def(st, e->v.Name.id,
-                              e->v.Name.ctx == Load ? USE : DEF_LOCAL))
+        if (!symtable_add_def_helper_pos(
+                    st, e->v.Name.id,
+                    e->v.Name.ctx == Load ? USE : DEF_LOCAL,
+                    st->st_cur,
+                    e->lineno, e->col_offset, e->end_lineno, e->end_col_offset))
             VISIT_QUIT(st, 0);
         /* Special-case super: it counts as a use of __class__ */
         if (e->v.Name.ctx == Load &&

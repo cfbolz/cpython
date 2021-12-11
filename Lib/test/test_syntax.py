@@ -1627,6 +1627,19 @@ case(34)
             end_offset=26
         )
 
+    def test_syntax_error_comprehension_inner_assignment_position(self):
+        self._check_error(
+            """{i for i in range(5)
+        if (jjj := 0)
+            for jjj in range(5)}
+            """,
+            "comprehension inner loop cannot rebind assignment expression target 'jjj'",
+            lineno=3,
+            end_lineno=3,
+            offset=17,
+            end_offset=20
+        )
+
     @support.cpython_only
     def test_syntax_error_on_deeply_nested_blocks(self):
         # This raises a SyntaxError, it used to raise a SystemError. Context
