@@ -1594,6 +1594,39 @@ case(34)
             lineno=3
         )
 
+    def test_syntax_error_duplicate_argument_position(self):
+        self._check_error(
+            """def f(abc,
+                    abc): pass
+            """,
+            "duplicate argument 'abc' in function definition",
+            lineno=2,
+            end_lineno=2,
+            offset=21,
+            end_offset=24
+        )
+        self._check_error(
+            """def f(abc,
+                    *abc): pass
+            """,
+            "duplicate argument 'abc' in function definition",
+            lineno=2,
+            end_lineno=2,
+            offset=22,
+            end_offset=25
+        )
+        self._check_error(
+            """def f(abc,
+                    xyz,
+                    **abc): pass
+            """,
+            "duplicate argument 'abc' in function definition",
+            lineno=3,
+            end_lineno=3,
+            offset=23,
+            end_offset=26
+        )
+
     @support.cpython_only
     def test_syntax_error_on_deeply_nested_blocks(self):
         # This raises a SyntaxError, it used to raise a SystemError. Context

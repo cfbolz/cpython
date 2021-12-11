@@ -367,6 +367,16 @@ class TracebackCases(unittest.TestCase):
             str(inspect.signature(traceback.format_exception_only)),
             '(exc, /, value=<implicit>)')
 
+    def test_syntax_error_duplicate_argument_position(self):
+        src = """def f(abc,
+        abc): pass"""
+        def f():
+            compile(src, "fn", "exec")
+        import pdb; pdb.set_trace()
+        err = self.get_exception_format(f,
+                                        SyntaxError)
+
+
 
 @requires_debug_ranges()
 class TracebackErrorLocationCaretTests(unittest.TestCase):

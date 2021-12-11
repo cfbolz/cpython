@@ -1025,7 +1025,9 @@ symtable_lookup(struct symtable *st, PyObject *name)
 }
 
 static int
-symtable_add_def_helper(struct symtable *st, PyObject *name, int flag, struct _symtable_entry *ste)
+symtable_add_def_helper_pos(struct symtable *st, PyObject *name, int flag,
+                            struct _symtable_entry *ste, int lineno,
+                            int col_offset, int end_lineno, int end_col_offset)
 {
     PyObject *o;
     PyObject *dict;
@@ -1042,10 +1044,10 @@ symtable_add_def_helper(struct symtable *st, PyObject *name, int flag, struct _s
             /* Is it better to use 'mangled' or 'name' here? */
             PyErr_Format(PyExc_SyntaxError, DUPLICATE_ARGUMENT, name);
             PyErr_RangedSyntaxLocationObject(st->st_filename,
-                                             ste->ste_lineno,
-                                             ste->ste_col_offset + 1,
-                                             ste->ste_end_lineno,
-                                             ste->ste_end_col_offset + 1);
+                                             lineno,
+                                             col_offset + 1,
+                                             end_lineno,
+                                             end_col_offset + 1);
             goto error;
         }
         val |= flag;
@@ -1066,10 +1068,10 @@ symtable_add_def_helper(struct symtable *st, PyObject *name, int flag, struct _s
             PyErr_Format(PyExc_SyntaxError,
                 NAMED_EXPR_COMP_INNER_LOOP_CONFLICT, name);
             PyErr_RangedSyntaxLocationObject(st->st_filename,
-                                             ste->ste_lineno,
-                                             ste->ste_col_offset + 1,
-                                             ste->ste_end_lineno,
-                                             ste->ste_end_col_offset + 1);
+                                             lineno,
+                                             col_offset + 1,
+                                             end_lineno,
+                                             end_col_offset + 1);
             goto error;
         }
         val |= DEF_COMP_ITER;
@@ -1111,6 +1113,12 @@ symtable_add_def_helper(struct symtable *st, PyObject *name, int flag, struct _s
 error:
     Py_DECREF(mangled);
     return 0;
+}
+
+static int
+symtable_add_def_helper(struct symtable *st, PyObject *name, int flag, struct _symtable_entry *ste) {
+    return symtable_add_def_helper_pos(st, name, flag, ste,
+            ste->ste_lineno, ste->ste_col_offset, ste->ste_end_lineno, ste->ste_end_col_offset);
 }
 
 static int
@@ -1804,7 +1812,9 @@ symtable_visit_params(struct symtable *st, asdl_arg_seq *args)
 
     for (i = 0; i < asdl_seq_LEN(args); i++) {
         arg_ty arg = (arg_ty)asdl_seq_GET(args, i);
-        if (!symtable_add_def(st, arg->arg, DEF_PARAM))
+        if (!symtable_add_def_helper_pos(st, arg->arg, DEF_PARAM, st->st_cur,
+                                         arg->lineno, arg->col_offset,
+                                         arg->end_lineno, arg->end_col_offset))
             return 0;
     }
 
@@ -1888,12 +1898,18 @@ symtable_visit_arguments(struct symtable *st, arguments_ty a)
     if (a->kwonlyargs && !symtable_visit_params(st, a->kwonlyargs))
         return 0;
     if (a->vararg) {
-        if (!symtable_add_def(st, a->vararg->arg, DEF_PARAM))
+        arg_ty arg = a->vararg;
+        if (!symtable_add_def_helper_pos(st, arg->arg, DEF_PARAM, st->st_cur,
+                                         arg->lineno, arg->col_offset,
+                                         arg->end_lineno, arg->end_col_offset))
             return 0;
         st->st_cur->ste_varargs = 1;
     }
     if (a->kwarg) {
-        if (!symtable_add_def(st, a->kwarg->arg, DEF_PARAM))
+        arg_ty arg = a->kwarg;
+        if (!symtable_add_def_helper_pos(st, arg->arg, DEF_PARAM, st->st_cur,
+                                         arg->lineno, arg->col_offset,
+                                         arg->end_lineno, arg->end_col_offset))
             return 0;
         st->st_cur->ste_varkeywords = 1;
     }
