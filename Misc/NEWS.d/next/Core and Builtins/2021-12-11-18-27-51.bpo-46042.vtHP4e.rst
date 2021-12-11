@@ -1,0 +1,3 @@
+Fix the error position of SyntaxErrors in two cases, when defining a
+function with repeated argument names and when rebinding a name in an inner
+comprehension that was defined by a named expression in an outer one.
