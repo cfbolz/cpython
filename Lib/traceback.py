@@ -419,6 +419,11 @@ def _get_code_position(code, instruction_index):
 
 _RECURSIVE_CUTOFF = 3 # Also hardcoded in traceback.c.
 
+def _hyperlink(url, text):
+    if text is None:
+        text = url
+    # OSC 8 ; params ; URI ST <name> OSC 8 ;; ST
+    return f'\033]8;;{url}\033\\{text}\033]8;;\033\\'
 
 class StackSummary(list):
     """A list of FrameSummary objects, representing a stack of frames."""
@@ -522,9 +527,10 @@ class StackSummary(list):
         if frame_summary.filename.startswith("<stdin>-"):
             filename = "<stdin>"
         if colorize:
+            import socket
             row.append('  File {}"{}"{}, line {}{}{}, in {}{}{}\n'.format(
                     ANSIColors.MAGENTA,
-                    filename,
+                    _hyperlink(f"file://{socket.gethostname()}{filename}", filename),
                     ANSIColors.RESET,
                     ANSIColors.MAGENTA,
                     frame_summary.lineno,
